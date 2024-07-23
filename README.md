@@ -8,8 +8,6 @@ This application manages downloaded audio by moving them into the folders with p
 
 ## Notes
 
-**IMPORTANT!** It is for personal use - app did not suppose to be flexible - just hardcoded folder structure.
-
 **NOTE!** This is my early try of Rustlang. Be caution, source code might cause an eye-bleeding
 
 ## TODOs
@@ -18,3 +16,4 @@ This application manages downloaded audio by moving them into the folders with p
 * Support other formats
 * Additional warnings (such as: "No Lyrics", "No cover", ...)
 * Automatically search for missing lyrics?
+* Config file in addition to cmd arguments
