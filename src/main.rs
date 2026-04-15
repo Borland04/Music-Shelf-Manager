@@ -5,16 +5,38 @@ use std::{
     process::exit,
     str,
 };
+use thiserror::Error;
 
 use id3::{Error, ErrorKind, Tag, TagLike};
 
 use colored::Colorize;
+
+use crate::ui::app::App;
+
+mod ui;
 
 const FORBIDDEN_SYMBOLS: [char; 9] = ['<', '>', ':', '\"', '/', '\\', '|', '?', '*'];
 const RESERVED_WINDOWS_NAMES: [&str; 22] = [
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
+
+#[derive(Error, Debug)]
+pub enum AppError {
+    #[error("Unable to initialize application")]
+    InitializationFailure(String),
+
+    #[error("Error while reading or processing target file")]
+    FileProcessingError(Vec<id3::Error>),
+
+    #[error("Critical error with Input/Output")]
+    IoError(#[from] std::io::Error), // source and Display delegate to anyhow::Error
+
+    #[error(transparent)]
+    Other(#[from] anyhow::Error), // source and Display delegate to anyhow::Error
+}
+
+pub type Result<T> = std::result::Result<T, AppError>;
 
 #[derive(Parser, Debug)]
 struct CliArgs {
@@ -37,6 +59,23 @@ struct RequiredTags {
 }
 
 fn main() {
+    let app = App::new();
+    if let Err(err) = app {
+        panic!(
+            "ERROR: unexpected error occurred while initiating TUI for current terminal: {}",
+            err
+        );
+    }
+
+    if let Err(err) = app.unwrap().run() {
+        panic!(
+            "ERROR: unexpected error occurred while running TUI application: {}",
+            err
+        );
+    }
+
+    exit(0);
+
     let args = CliArgs::parse();
     if args.files.is_empty() {
         println!(
@@ -79,10 +118,12 @@ fn main() {
     }
 }
 
-fn handle_file(filepath: &PathBuf, root_folder: &PathBuf) -> Result<(), Vec<id3::Error>> {
+fn handle_file(filepath: &PathBuf, root_folder: &PathBuf) -> Result<()> {
     let tag_result = Tag::read_from_path(filepath);
     if tag_result.is_err() {
-        return Result::Err(vec![tag_result.err().unwrap()]);
+        return Err(AppError::FileProcessingError(vec![tag_result
+            .err()
+            .unwrap()]));
     }
 
     let tag = tag_result.unwrap();
@@ -111,10 +152,13 @@ fn handle_file(filepath: &PathBuf, root_folder: &PathBuf) -> Result<(), Vec<id3:
             let target_path = generate_target_path(filepath, root_folder, tags);
             copy_file(filepath, &target_path).map_err(|e| vec![e])
         })
+        .map_err(AppError::FileProcessingError)
 }
 
-fn handle_tags(tags: Vec<Result<&str, Error>>) -> Result<Vec<String>, Vec<Error>> {
-    let mut result = Result::Ok(Vec::new());
+fn handle_tags(
+    tags: Vec<std::result::Result<&str, id3::Error>>,
+) -> std::result::Result<Vec<String>, Vec<id3::Error>> {
+    let mut result = Ok(Vec::new());
 
     for current_tag in tags {
         match result {
@@ -180,7 +224,7 @@ fn normalize_path_entry(path_entry: &str) -> String {
     result
 }
 
-fn copy_file(source: &PathBuf, target: &PathBuf) -> Result<(), Error> {
+fn copy_file(source: &PathBuf, target: &PathBuf) -> std::result::Result<(), id3::Error> {
     target
         .parent()
         .ok_or(Error::new(
@@ -205,11 +249,7 @@ fn copy_file(source: &PathBuf, target: &PathBuf) -> Result<(), Error> {
         })
 }
 
-fn print_handling_status(
-    filename: &str,
-    longest_filename_len: usize,
-    result: &Result<(), Vec<id3::Error>>,
-) {
+fn print_handling_status(filename: &str, longest_filename_len: usize, result: &Result<()>) {
     // Even for longest filename need to add '...'
     let dots_amount = longest_filename_len - filename.chars().count() + 10;
     let dots: String = ".".repeat(dots_amount);
@@ -218,21 +258,25 @@ fn print_handling_status(
         Ok(()) => {
             println!("{}{}{}", filename, dots, "Ok".green().bold());
         }
-        Err(errors) => {
-            let pretty_error_print: fn(&Error) -> String =
-                |err| format!("{}: {}", err.kind, err.description);
+        Err(err) => {
+            if let AppError::FileProcessingError(errors) = err {
+                let pretty_error_print: fn(&id3::Error) -> String =
+                    |err| format!("{}: {}", err.kind, err.description);
 
-            let (fst, other) = errors.split_first().unwrap();
-            println!(
-                "{}{}{}",
-                filename,
-                dots,
-                pretty_error_print(fst).red().bold()
-            );
+                let (fst, other) = errors.split_first().unwrap();
+                println!(
+                    "{}{}{}",
+                    filename,
+                    dots,
+                    pretty_error_print(fst).red().bold()
+                );
 
-            let indent: String = " ".repeat(filename.chars().count() + dots_amount);
-            for err in other {
-                println!("{}{}", indent, pretty_error_print(err).red().bold());
+                let indent: String = " ".repeat(filename.chars().count() + dots_amount);
+                for err in other {
+                    println!("{}{}", indent, pretty_error_print(err).red().bold());
+                }
+            } else {
+                println!("{}{}{}", filename, dots, err.to_string().red().bold());
             }
         }
     }
